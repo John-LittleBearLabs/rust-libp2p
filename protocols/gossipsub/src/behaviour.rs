@@ -50,7 +50,7 @@ use crate::backoff::BackoffStorage;
 use crate::config::{GossipsubConfig, ValidationMode};
 use crate::error::{PublishError, SubscriptionError, ValidationError};
 use crate::gossip_promises::GossipPromises;
-use crate::handler::{GossipsubHandler, GossipsubHandlerIn, HandlerEvent};
+use crate::handler::{GossipsubHandler, GossipsubHandlerIn, HandlerEvent, HeapMessage};
 use crate::mcache::MessageCache;
 use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty};
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
@@ -200,7 +200,7 @@ impl From<MessageAuthenticity> for PublishConfig {
 }
 
 type GossipsubNetworkBehaviourAction =
-    NetworkBehaviourAction<GossipsubEvent, GossipsubHandler, Arc<GossipsubHandlerIn>>;
+    NetworkBehaviourAction<GossipsubEvent, GossipsubHandler>;
 
 /// Network behaviour that handles the gossipsub protocol.
 ///
@@ -522,7 +522,7 @@ where
         // send subscription request to all peers
         let peer_list = self.peer_topics.keys().cloned().collect::<Vec<_>>();
         if !peer_list.is_empty() {
-            let event = GossipsubRpc {
+            let event = HeapMessage::from(Arc::new(GossipsubRpc {
                 messages: Vec::new(),
                 subscriptions: vec![GossipsubSubscription {
                     topic_hash: topic_hash.clone(),
@@ -530,11 +530,11 @@ where
                 }],
                 control_msgs: Vec::new(),
             }
-            .into_protobuf();
+            .into_protobuf()));
 
             for peer in peer_list {
                 debug!("Sending SUBSCRIBE to peer: {:?}", peer);
-                self.send_message(peer, event.clone())
+                self.send_message(peer, event)
                     .map_err(SubscriptionError::PublishError)?;
             }
         }
@@ -562,7 +562,7 @@ where
         // announce to all peers
         let peer_list = self.peer_topics.keys().cloned().collect::<Vec<_>>();
         if !peer_list.is_empty() {
-            let event = GossipsubRpc {
+            let event = HeapMessage::from( GossipsubRpc {
                 messages: Vec::new(),
                 subscriptions: vec![GossipsubSubscription {
                     topic_hash: topic_hash.clone(),
@@ -570,11 +570,11 @@ where
                 }],
                 control_msgs: Vec::new(),
             }
-            .into_protobuf();
+            .into_protobuf());
 
             for peer in peer_list {
                 debug!("Sending UNSUBSCRIBE to peer: {}", peer.to_string());
-                self.send_message(peer, event.clone())?;
+                self.send_message(peer, event)?;
             }
         }
 
@@ -610,12 +610,12 @@ where
             topic: raw_message.topic.clone(),
         });
 
-        let event = GossipsubRpc {
+        let event = HeapMessage::from(GossipsubRpc {
             subscriptions: Vec::new(),
             messages: vec![raw_message.clone()],
             control_msgs: Vec::new(),
         }
-        .into_protobuf();
+        .into_protobuf());
 
         // check that the size doesn't exceed the max transmission size
         if event.encoded_len() > self.config.max_transmit_size() {
@@ -732,7 +732,7 @@ where
         let msg_bytes = event.encoded_len();
         for peer_id in recipient_peers.iter() {
             trace!("Sending message to peer: {:?}", peer_id);
-            self.send_message(*peer_id, event.clone())?;
+            self.send_message(*peer_id, event)?;
 
             if let Some(m) = self.metrics.as_mut() {
                 m.msg_sent(&topic_hash, msg_bytes);
@@ -1341,12 +1341,12 @@ where
                 .map(|message| message.topic.clone())
                 .collect::<HashSet<TopicHash>>();
 
-            let message = GossipsubRpc {
+            let message : HeapMessage = GossipsubRpc {
                 subscriptions: Vec::new(),
                 messages: message_list,
                 control_msgs: Vec::new(),
             }
-            .into_protobuf();
+            .into_protobuf().into();
 
             let msg_bytes = message.encoded_len();
 
@@ -1519,7 +1519,7 @@ where
                     messages: Vec::new(),
                     control_msgs: prune_messages,
                 }
-                .into_protobuf(),
+                .into_protobuf().into(),
             ) {
                 error!("Failed to send PRUNE: {:?}", e);
             }
@@ -2069,7 +2069,7 @@ where
                             .map(|topic_hash| GossipsubControlAction::Graft { topic_hash })
                             .collect(),
                     }
-                    .into_protobuf(),
+                    .into_protobuf().into(),
                 )
                 .is_err()
         {
@@ -2635,7 +2635,7 @@ where
                         messages: Vec::new(),
                         control_msgs,
                     }
-                    .into_protobuf(),
+                    .into_protobuf().into(),
                 )
                 .is_err()
             {
@@ -2675,7 +2675,7 @@ where
                         messages: Vec::new(),
                         control_msgs: remaining_prunes,
                     }
-                    .into_protobuf(),
+                    .into_protobuf().into(),
                 )
                 .is_err()
             {
@@ -2737,17 +2737,17 @@ where
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            let event = GossipsubRpc {
+            let event : HeapMessage = GossipsubRpc {
                 subscriptions: Vec::new(),
                 messages: vec![message.clone()],
                 control_msgs: Vec::new(),
             }
-            .into_protobuf();
+            .into_protobuf().into();
 
             let msg_bytes = event.encoded_len();
             for peer in recipient_peers.iter() {
                 debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
-                self.send_message(*peer, event.clone())?;
+                self.send_message(*peer, event)?;
                 if let Some(m) = self.metrics.as_mut() {
                     m.msg_sent(&message.topic, msg_bytes);
                 }
@@ -2872,7 +2872,7 @@ where
                         messages: Vec::new(),
                         control_msgs: controls,
                     }
-                    .into_protobuf(),
+                    .into_protobuf().into(),
                 )
                 .is_err()
             {
@@ -2889,7 +2889,7 @@ where
     fn send_message(
         &mut self,
         peer_id: PeerId,
-        message: rpc_proto::Rpc,
+        message: HeapMessage,
     ) -> Result<(), PublishError> {
         // If the message is oversized, try and fragment it. If it cannot be fragmented, log an
         // error and drop the message (all individual messages should be small enough to fit in the
@@ -2901,7 +2901,7 @@ where
             self.events
                 .push_back(NetworkBehaviourAction::NotifyHandler {
                     peer_id,
-                    event: Arc::new(GossipsubHandlerIn::Message(message)),
+                    event: GossipsubHandlerIn::Message(message),
                     handler: NotifyHandler::Any,
                 })
         }
@@ -2910,18 +2910,18 @@ where
 
     // If a message is too large to be sent as-is, this attempts to fragment it into smaller RPC
     // messages to be sent.
-    fn fragment_message(&self, rpc: rpc_proto::Rpc) -> Result<Vec<rpc_proto::Rpc>, PublishError> {
+    fn fragment_message(&self, rpc: HeapMessage) -> Result<Vec<HeapMessage>, PublishError> {
         if rpc.encoded_len() < self.config.max_transmit_size() {
             return Ok(vec![rpc]);
         }
 
-        let new_rpc = rpc_proto::Rpc {
+        let new_rpc : HeapMessage = rpc_proto::Rpc {
             subscriptions: Vec::new(),
             publish: Vec::new(),
             control: None,
-        };
+        }.into();
 
-        let mut rpc_list = vec![new_rpc.clone()];
+        let mut rpc_list = vec![new_rpc];
 
         // Gets an RPC if the object size will fit, otherwise create a new RPC. The last element
         // will be the RPC to add an object.
@@ -2962,17 +2962,17 @@ where
         }
 
         // Add messages until the limit
-        for message in &rpc.publish {
+        for message in &rpc.contents.publish {
             add_item!(message, publish);
         }
-        for subscription in &rpc.subscriptions {
+        for subscription in &rpc.contents.subscriptions {
             add_item!(subscription, subscriptions);
         }
 
         // handle the control messages. If all are within the max_transmit_size, send them without
         // fragmenting, otherwise, fragment the control messages
         let empty_control = rpc_proto::ControlMessage::default();
-        if let Some(control) = rpc.control.as_ref() {
+        if let Some(control) = rpc.contents.control.as_ref() {
             if control.encoded_len() + 2 > self.config.max_transmit_size() {
                 // fragment the RPC
                 for ihave in &control.ihave {
@@ -2981,6 +2981,7 @@ where
                     rpc_list
                         .last_mut()
                         .expect("Always an element")
+                        .contents
                         .control
                         .get_or_insert_with(|| empty_control.clone())
                         .ihave
@@ -3127,7 +3128,7 @@ where
                                 subscriptions,
                                 control_msgs: Vec::new(),
                             }
-                            .into_protobuf(),
+                            .into_protobuf().into(),
                         )
                         .is_err()
                     {
@@ -3186,7 +3187,7 @@ where
                                     self.events
                                         .push_back(NetworkBehaviourAction::NotifyHandler {
                                             peer_id: *peer_id,
-                                            event: Arc::new(GossipsubHandlerIn::JoinedMesh),
+                                            event: GossipsubHandlerIn::JoinedMesh,
                                             handler: NotifyHandler::One(connections.connections[0]),
                                         });
                                     break;
@@ -3439,10 +3440,10 @@ where
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
         if let Some(event) = self.events.pop_front() {
-            return Poll::Ready(event.map_in(|e: Arc<GossipsubHandlerIn>| {
+            return Poll::Ready(event);/*event.map_in(|e: Arc<GossipsubHandlerIn>| {
                 // clone send event reference if others references are present
                 Arc::try_unwrap(e).unwrap_or_else(|e| (*e).clone())
-            }));
+            }));*/
         }
 
         // update scores
@@ -3496,7 +3497,7 @@ fn peer_added_to_mesh(
     // This is the first mesh the peer has joined, inform the handler
     events.push_back(NetworkBehaviourAction::NotifyHandler {
         peer_id,
-        event: Arc::new(GossipsubHandlerIn::JoinedMesh),
+        event: GossipsubHandlerIn::JoinedMesh,
         handler: NotifyHandler::One(connection_id),
     });
 }
@@ -3535,7 +3536,7 @@ fn peer_removed_from_mesh(
     // The peer is not in any other mesh, inform the handler
     events.push_back(NetworkBehaviourAction::NotifyHandler {
         peer_id,
-        event: Arc::new(GossipsubHandlerIn::LeftMesh),
+        event: GossipsubHandlerIn::LeftMesh,
         handler: NotifyHandler::One(*connection_id),
     });
 }

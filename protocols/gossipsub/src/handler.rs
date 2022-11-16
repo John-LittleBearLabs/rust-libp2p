@@ -37,9 +37,14 @@ use std::{
     collections::VecDeque,
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
+use std::ops::Deref;
+use bytes::{Buf, BufMut};
+use prost::DecodeError;
+use prost::encoding::{DecodeContext, WireType};
 
 /// The initial time (in seconds) we set the keep alive for protocol negotiations to occur.
 const INITIAL_KEEP_ALIVE: u64 = 30;
@@ -62,11 +67,53 @@ pub enum HandlerEvent {
     PeerKind(PeerKind),
 }
 
+#[derive(Clone,Debug,Default)]
+pub(crate) struct HeapMessage {
+    pub(crate) contents: Arc <crate ::rpc_proto::Rpc>
+}
+
+impl From<Arc<crate::rpc_proto::Rpc>> for HeapMessage {
+    fn from(contents: Arc<crate::rpc_proto::Rpc>) -> Self {
+        Self{
+            contents
+        }
+    }
+}
+impl From<crate::rpc_proto::Rpc> for HeapMessage {
+    fn from(val: crate::rpc_proto::Rpc) -> Self {
+        Self::from(Arc::new(val))
+    }
+}
+
+impl PartialEq for HeapMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.contents.deref() != other.contents.deref()
+    }
+}
+
+impl prost::Message for HeapMessage {
+    fn encode_raw<B>(&self, buf: &mut B) where B: BufMut, Self: Sized {
+        self.contents.encode_raw(buf)
+    }
+
+    fn merge_field<B>(&mut self, tag: u32, wire_type: WireType, buf: &mut B, ctx: DecodeContext) -> Result<(), DecodeError> where B: Buf, Self: Sized {
+        self.contents.merge_field(tag,wire_type,buf,ctx)
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.contents.encoded_len()
+    }
+
+    fn clear(&mut self) {
+        self.contents.clear()
+    }
+}
+
 /// A message sent from the behaviour to the handler.
 #[derive(Debug, Clone)]
 pub enum GossipsubHandlerIn {
     /// A gossipsub message to send.
-    Message(crate::rpc_proto::Rpc),
+    Message(HeapMessage),
     /// The peer has joined the mesh.
     JoinedMesh,
     /// The peer has left the mesh.
@@ -92,7 +139,7 @@ pub struct GossipsubHandler {
     inbound_substream: Option<InboundSubstreamState>,
 
     /// Queue of values that we want to send to the remote.
-    send_queue: SmallVec<[crate::rpc_proto::Rpc; 16]>,
+    send_queue: SmallVec<[HeapMessage; 16]>,
 
     /// Flag indicating that an outbound substream is being established to prevent duplicate
     /// requests.
@@ -150,7 +197,7 @@ enum OutboundSubstreamState {
     /// Waiting to send a message to the remote.
     PendingSend(
         Framed<NegotiatedSubstream, GossipsubCodec>,
-        crate::rpc_proto::Rpc,
+        HeapMessage,
     ),
     /// Waiting to flush the substream so that the data arrives to the remote.
     PendingFlush(Framed<NegotiatedSubstream, GossipsubCodec>),
@@ -188,7 +235,7 @@ impl ConnectionHandler for GossipsubHandler {
     type Error = GossipsubHandlerError;
     type InboundOpenInfo = ();
     type InboundProtocol = ProtocolConfig;
-    type OutboundOpenInfo = crate::rpc_proto::Rpc;
+    type OutboundOpenInfo = HeapMessage;
     type OutboundProtocol = ProtocolConfig;
 
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {

@@ -295,7 +295,6 @@ pub trait PollParameters {
 pub enum NetworkBehaviourAction<
     TOutEvent,
     THandler: IntoConnectionHandler,
-    TInEvent = THandlerInEvent<THandler>,
 > {
     /// Instructs the `Swarm` to return an event when it is being polled.
     GenerateEvent(TOutEvent),
@@ -508,7 +507,7 @@ pub enum NetworkBehaviourAction<
         /// The options w.r.t. which connection handler to notify of the event.
         handler: NotifyHandler,
         /// The event to send.
-        event: TInEvent,
+        event: THandlerInEvent<THandler>,
     },
 
     /// Informs the `Swarm` about an address observed by a remote for
@@ -544,9 +543,9 @@ pub enum NetworkBehaviourAction<
         connection: CloseConnection,
     },
 }
-
+/* TODO - resove a better way to do this based on the needs of usage , see: GossipsubHandlerIn
 impl<TOutEvent, THandler: IntoConnectionHandler, TInEventOld>
-    NetworkBehaviourAction<TOutEvent, THandler, TInEventOld>
+    NetworkBehaviourAction<TOutEvent, THandler>
 {
     /// Map the handler event.
     pub fn map_in<TInEventNew>(
@@ -580,6 +579,7 @@ impl<TOutEvent, THandler: IntoConnectionHandler, TInEventOld>
         }
     }
 }
+*/
 
 impl<TOutEvent, THandler: IntoConnectionHandler> NetworkBehaviourAction<TOutEvent, THandler> {
     /// Map the event the swarm will return.

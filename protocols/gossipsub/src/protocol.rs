@@ -20,7 +20,7 @@
 
 use crate::config::{GossipsubVersion, ValidationMode};
 use crate::error::{GossipsubHandlerError, ValidationError};
-use crate::handler::HandlerEvent;
+use crate::handler::{HandlerEvent, HeapMessage};
 use crate::rpc_proto;
 use crate::topic::TopicHash;
 use crate::types::{
@@ -186,7 +186,7 @@ pub struct GossipsubCodec {
     /// Determines the level of validation performed on incoming messages.
     validation_mode: ValidationMode,
     /// The codec to handle common encoding/decoding of protobuf messages
-    codec: prost_codec::Codec<rpc_proto::Rpc>,
+    codec: prost_codec::Codec<HeapMessage>,
 }
 
 impl GossipsubCodec {
@@ -264,7 +264,7 @@ impl GossipsubCodec {
 }
 
 impl Encoder for GossipsubCodec {
-    type Item = rpc_proto::Rpc;
+    type Item = HeapMessage;
     type Error = GossipsubHandlerError;
 
     fn encode(
@@ -287,11 +287,11 @@ impl Decoder for GossipsubCodec {
         };
 
         // Store valid messages.
-        let mut messages = Vec::with_capacity(rpc.publish.len());
+        let mut messages = Vec::with_capacity(rpc.contents.publish.len());
         // Store any invalid messages.
         let mut invalid_messages = Vec::new();
 
-        for message in rpc.publish.into_iter() {
+        for message in rpc.contents.publish.into_iter() {
             // Keep track of the type of invalid message.
             let mut invalid_kind = None;
             let mut verify_signature = false;
@@ -462,7 +462,7 @@ impl Decoder for GossipsubCodec {
 
         let mut control_msgs = Vec::new();
 
-        if let Some(rpc_control) = rpc.control {
+        if let Some(rpc_control) = rpc.contents.control {
             // Collect the gossipsub control messages
             let ihave_msgs: Vec<GossipsubControlAction> = rpc_control
                 .ihave
